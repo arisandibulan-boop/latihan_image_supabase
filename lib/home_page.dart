@@ -1,14 +1,8 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:path/path.dart';
-
-// Inisialisasi Supabase Client
-final supabase = Supabase.instance.client;
-
-// Nama bucket untuk penyimpanan gambar
-const String kImageBucket = 'Supabase Foto';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -18,253 +12,110 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  File? _imageFile;
-  String? _imageUrl;
-  bool _isLoading = false;
+  final SupabaseClient supabase = Supabase.instance.client;
+  final ImagePicker _picker = ImagePicker();
 
-  // Pilih Gambar dari Galeri
-  Future<void> _pickImage() async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+  String? uploadedImageUrl;
+  bool isLoading = false;
 
-    if (pickedFile != null) {
-      setState(() {
-        _imageFile = File(pickedFile.path);
-        _imageUrl = null; // Reset URL saat gambar baru dipilih
-      });
-    }
-  }
-
-  // Upload Gambar ke Supabase Storage
-  Future<void> _uploadImage() async {
-    if (_imageFile == null) return;
-
-    setState(() {
-      _isLoading = true;
-    });
-
+  Future<void> _handleUpload() async {
     try {
-      final userId = supabase.auth.currentUser?.id;
-      if (userId == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context as BuildContext).showSnackBar(
-            const SnackBar(
-              content: Text('Error: User tidak login. Silakan login.'),
-            ),
-          );
-        }
-        return;
-      }
+      // 1. Pilih gambar dari galeri
+      final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
 
-      // Buat path unik untuk file yang diupload
-      final fileExtension = extension(_imageFile!.path);
-      final uploadPath =
-          '$userId/${DateTime.now().microsecondsSinceEpoch}$fileExtension';
+      if (image == null) return;
 
-      // Upload file ke Supabase Storage
+      setState(() => isLoading = true);
+
+      final file = File(image.path);
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}_${image.name}';
+
+      // 2. Upload ke Supabase Storage
       await supabase.storage
-          .from(kImageBucket)
-          .upload(
-            uploadPath,
-            _imageFile!,
-            fileOptions: const FileOptions(cacheControl: '3600', upsert: false),
-          );
+          .from('bucket_images')
+          .upload('uploads/$fileName', file);
 
-      // Dapatkan public URL dari file yang diupload
+      // 3. Dapatkan public URL
       final publicUrl = supabase.storage
-          .from(kImageBucket)
-          .getPublicUrl(uploadPath);
+          .from('bucket_images')
+          .getPublicUrl('uploads/$fileName');
 
       setState(() {
-        _imageUrl = publicUrl;
-        // Hapus referensi file lokal agar tampilan beralih ke Image.network
-        _imageFile = null;
+        uploadedImageUrl = publicUrl;
+        isLoading = false;
       });
-
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context as BuildContext,
-        ).showSnackBar(const SnackBar(content: Text('Upload berhasil!')));
-      }
-    } on StorageException catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context as BuildContext,
-        ).showSnackBar(SnackBar(content: Text('Error Storage: ${e.message}')));
-      }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context as BuildContext,
-        ).showSnackBar(SnackBar(content: Text('Terjadi error umum: $e')));
-      }
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  //Gabungkan Pemilihan dan Upload Gambar
-  Future<void> _pickAndUploadImage() async {
-    // Mulai loading
-    setState(() {
-      _isLoading = true;
-    });
-
-    await _pickImage();
-
-    // Jika gambar terpilih, lanjutkan upload
-    if (_imageFile != null) {
-      // Fungsi _uploadImage akan mengatur _isLoading menjadi false di akhirnya
-      await _uploadImage();
-    } else {
-      // Jika tidak ada gambar yang dipilih, hentikan loading
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => isLoading = false);
+      debugPrint('Upload error: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: <Widget>[
-                const SizedBox(height: 50),
+      backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: true,
+        title: const Text(
+          'Upload ke Public Bucket',
+          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+        ),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const SizedBox(height: 20),
 
-                const Text(
-                  'Upload ke Public Bucket',
-                  style: TextStyle(fontSize: 24, fontWeight: FontWeight.w400),
+            // Tombol untuk memilih dan mengupload gambar
+            OutlinedButton(
+              onPressed: isLoading ? null : _handleUpload,
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 40,
+                  vertical: 15,
                 ),
-
-                const SizedBox(height: 50),
-
-                // Tombol "Pilih & Upload Gambar"
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _pickAndUploadImage,
-                  style: ElevatedButton.styleFrom(
-                    elevation: 0,
-                    backgroundColor: Colors.purple.shade50,
-                    foregroundColor: Colors.purple.shade600,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(25),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 30,
-                      vertical: 15,
-                    ),
-                  ),
-                  child: _isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.purple,
-                          ),
-                        )
-                      : const Text(
-                          'Pilih & Upload Gambar',
-                          style: TextStyle(fontSize: 16),
-                        ),
+                side: BorderSide(color: Colors.purple.shade100),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
                 ),
-
-                const SizedBox(height: 50),
-
-                // Label "Gambar dari Public URL:"
-                const Align(
-                  alignment: Alignment.center,
-                  child: Text(
-                    'Gambar dari Public URL:',
-                    style: TextStyle(fontSize: 14),
-                  ),
-                ),
-
-                const SizedBox(height: 10),
-
-                // Tampilkan Gambar atau Placeholder
-                Container(
-                  width: double.infinity,
-                  height: 300,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300, width: 1),
-                    color: Colors.white,
-                  ),
-                  child: _isLoading && _imageFile != null
-                      ? const Center(child: CircularProgressIndicator())
-                      : _imageUrl != null && _imageUrl!.isNotEmpty
-                      ? Image.network(
-                          _imageUrl!,
-                          fit: BoxFit.contain,
-                          loadingBuilder: (context, child, loadingProgress) {
-                            if (loadingProgress == null) {
-                              return child;
-                            }
-                            return const Center(
-                              child: CircularProgressIndicator(),
-                            );
-                          },
-                          errorBuilder: (context, error, stackTrace) {
-                            return const Center(
-                              child: Text('Gagal memuat gambar dari URL.'),
-                            );
-                          },
-                        )
-                      : (_imageFile != null
-                            ? Image.file(_imageFile!, fit: BoxFit.contain)
-                            : const Center(
-                                child: Text(
-                                  'URL Gambar akan ditampilkan di sini.',
-                                ),
-                              )),
-                ),
-
-                const SizedBox(height: 20),
-
-                // Tampilkan URL Gambar jika ada
-                if (_imageUrl != null && _imageUrl!.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 10.0),
-                    child: SelectableText(
-                      _imageUrl!,
-                      style: const TextStyle(fontSize: 12, color: Colors.blue),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-
-                const SizedBox(height: 50),
-
-                // Info Bucket 
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8.0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Buckets',
+              ),
+              child: isLoading
+                  ? const CircularProgressIndicator()
+                  : Text(
+                      'Pilih & Upload Gambar',
                       style: TextStyle(
-                        fontWeight: FontWeight.bold,
+                        color: Colors.purple.shade300,
                         fontSize: 16,
                       ),
                     ),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [Text('Supabase Foto'), Text('Public')],
-                  ),
-                ),
-              ],
             ),
-          ),
+
+            const SizedBox(height: 30),
+
+            const Align(
+              alignment: Alignment.center,
+              child: Text(
+                'Gambar dari Public URL:',
+                style: TextStyle(fontSize: 16, color: Colors.black87),
+                textAlign: TextAlign.center,
+              ),
+            ),
+
+            const Spacer(),
+
+            // Tampilkan URL gambar yang sudah diupload
+            if (uploadedImageUrl != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 20),
+                child: SelectableText(
+                  uploadedImageUrl!,
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                ),
+              ),
+          ],
         ),
       ),
     );
